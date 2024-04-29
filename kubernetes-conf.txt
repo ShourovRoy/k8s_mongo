@@ -1,0 +1,102 @@
+The mongo image "shourovroy/motonok-dbs:latest", I am using is configured and uploaded with the following docker file so that I can get key-file
+```
+FROM mongo
+RUN openssl rand -base64 756 > /etc/mongo-keyfile 
+RUN chmod 400 /etc/mongo-keyfile 
+RUN chown mongodb:mongodb /etc/mongo-keyfile 
+```
+
+Kubernetes Service, Statefulset yml conf using the pushed docker image
+```
+apiVersion: v1
+kind: Service
+metadata:
+  name: mdb
+  labels:
+    app: mdb
+spec:
+  ports:
+  - port: 27017
+    targetPort: 27017
+    name: mdb
+  clusterIP: None
+  selector:
+    app: mdb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mdb
+spec:
+  selector:
+    matchLabels:
+      app: mdb # has to match .spec.template.metadata.labels
+  serviceName: "mdb"
+  replicas: 1
+  minReadySeconds: 10 # by default is 0
+  template:
+    metadata:
+      labels:
+        app: mdb # has to match .spec.selector.matchLabels
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: mdb
+        image: shourovroy/motonok-dbs:latest
+        command: ["mongod"]
+        args: ["--replSet", "rs0", "--keyFile", "/etc/mongo-keyfile", "--bind_ip_all", "--port", "27017"]
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: "admin"
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: "admin"
+        ports:
+        - containerPort: 27017
+        volumeMounts:
+        - name: mdb-vol
+          mountPath: /data/db
+  volumeClaimTemplates:
+  - metadata:
+      name: mdb-vol
+    spec:
+      volumeMode: Filesystem
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+```
+Once the mdb-0 Pod is running accessing the pod to configure rs.initiate using the following commands:
+
+```
+kubectl exec -it mdb-0 -- mongosh
+```
+
+After that rs.initiate configuration command in the pod,
+Note: here only 127.0.0.1:27017 working, but mdb-0.mdb.svc.default.cluster.local:27017 not working
+```
+rs.initiate(
+   {
+      _id: "rs0",
+      version: 1,
+      members: [
+         { _id: 0, host : "127.0.0.1:27017" }
+      ]
+   }
+)
+```
+
+Exposing the pod:
+```
+kubectl expose pod mdb-0 --port 27017 --target-port 27017 --type LoadBalancer
+```
+
+Connection from compass:
+```
+mongodb://admin:admin@localhost:27017/?replicaSet=rs0
+```
+
+Error: Authentication Failed if env is there to set username and password.
+
+Note: The replicaset is working perfectly without authentication. Again, the auth is working with env without replicaset configuration.
+
+Please help me 
